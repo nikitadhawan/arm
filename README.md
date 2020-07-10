@@ -6,13 +6,13 @@
 * MNIST Experiment
     * Train
     * Evaluate
+* FEMNIST Experiment
+    * Download data
+    * Train
+    * Evaluate
 * CelebA Experiment
     * Download CelebA
     * Libjpeg-Turbo for data loading
-    * Train
-    * Evaluate
-* FEMNIST Experiment
-    * Download data
     * Train
     * Evaluate
 
