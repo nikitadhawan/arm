@@ -84,7 +84,6 @@ def test(args, eval_on):
     model = utils.get_model(args, image_shape=train_loader.dataset.image_shape)
     state_dict = torch.load(args.ckpt_path)
 
-
     # Remove unnecessary weights from the model.
     new_state_dict = state_dict[0]
     if "context_net.classifier.weight" in new_state_dict:
@@ -159,7 +158,7 @@ parser.add_argument('--data_dir', type=str, default='../data/')
 # CelebA Data
 parser.add_argument('--target_resolution', type=int, default=224,
                     help='Resize image to this size before feeding in to model')
-parser.add_argument('--target_name', type=str, default='Blond_Hair',
+parser.add_argument('--target_name', type=str, nargs='+', default=['Blond_Hair'],
                     help='The y value we are trying to predict')
 parser.add_argument('--confounder_names', type=str, nargs='+',
                     default=['Male'],
@@ -207,6 +206,7 @@ parser.add_argument('--crop_type', type=int, default=0)
 parser.add_argument('--ckpt_folders', type=str, nargs='+', default='')
 
 parser.add_argument('--context_net', type=str, default='convnet')
+parser.add_argument('--bn', type=int, default=0, help='Whether or not to adapt batchnorm statistics.')
 
 parser.add_argument('--pret_add_channels', type=int, default=1,
                                    help='Relevant when using context and pretrained resnet')

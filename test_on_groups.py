@@ -51,18 +51,44 @@ def test(args, eval_on):
 
     # Get model
     model = utils.get_model(args, image_shape=train_loader.dataset.image_shape)
-    state_dict = torch.load(args.ckpt_path)[0]
-    model.load_state_dict(state_dict)
+    state_dict = torch.load(args.ckpt_path)
+    if args.dataset == 'celeba' and args.use_context == 0:
+        # Remove unnecessary weights from the model.
+        new_state_dict = state_dict[0]
+        if "context_net.classifier.weight" in new_state_dict:
+            del new_state_dict["context_net.classifier.weight"]
+
+        if "context_net.classifier.bias" in new_state_dict:
+            del new_state_dict["context_net.classifier.bias"]
+
+        new_state_dict_2 = {}
+        for key in new_state_dict.keys():
+            new_key = key.replace('module.', '')
+            new_state_dict_2[new_key] = new_state_dict[key]
+        new_state_dict = new_state_dict_2
+
+        model.load_state_dict(new_state_dict)
+    else:
+        model.load_state_dict(state_dict[0])
 
     model = model.to(args.device)
     model.eval()
 
-    if eval_on == 'train':
-        worst_case_acc, stats = utils.evaluate_groups(args, model, train_eval_loader, split='train')
-    elif eval_on == 'val':
-        worst_case_acc, stats = utils.evaluate_groups(args, model, val_loader, split='val')
-    elif eval_on == 'test':
-        worst_case_acc, stats = utils.evaluate_groups(args, model, test_loader, split='test')
+    if args.dataset in ['mnist', 'femnist']:
+        if eval_on == 'train':
+            worst_case_acc, stats = utils.evaluate_groups(args, model, train_eval_loader, split='train')
+        elif eval_on == 'val':
+            worst_case_acc, stats = utils.evaluate_groups(args, model, val_loader, split='val')
+        elif eval_on == 'test':
+            worst_case_acc, stats = utils.evaluate_groups(args, model, test_loader, split='test')
+            
+    else:
+        if eval_on == 'train':
+            worst_case_acc, stats = utils.evaluate_groups_large_dataset(args, model, train_eval_loader, split='train')
+        elif eval_on == 'val':
+            worst_case_acc, stats = utils.evaluate_groups_large_dataset(args, model, val_loader, split='val')
+        elif eval_on == 'test':
+            worst_case_acc, stats = utils.evaluate_groups_large_dataset(args, model, test_loader, split='test')
 
     return worst_case_acc, stats
 
@@ -95,7 +121,7 @@ parser.add_argument('--data_dir', type=str, default='../data/')
 # CelebA Data
 parser.add_argument('--target_resolution', type=int, default=224,
                     help='Resize image to this size before feeding in to model')
-parser.add_argument('--target_name', type=str, default='Blond_Hair',
+parser.add_argument('--target_name', type=str, nargs='+', default=['Blond_Hair'],
                     help='The y value we are trying to predict')
 parser.add_argument('--confounder_names', type=str, nargs='+',
                     default=['Male'],
@@ -144,6 +170,7 @@ parser.add_argument('--crop_size_factor', type=float, default=1)
 parser.add_argument('--ckpt_folders', type=str, nargs='+')
 
 parser.add_argument('--context_net', type=str, default='convnet')
+parser.add_argument('--bn', type=int, default=0, help='Whether or not to adapt batchnorm statistics.')
 
 parser.add_argument('--experiment_name', type=str, default='')
 

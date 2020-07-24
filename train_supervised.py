@@ -16,7 +16,7 @@ import torchvision
 import data
 import utils
 from dro_loss import LossComputer
-from specified_dists import dist_sets
+# from specified_dists import dist_sets
 from binned_dists import get_binned_dists
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = "TRUE"
@@ -56,6 +56,8 @@ parser.add_argument('--n_context_channels', type=int, default=3, help='Used when
 # Evaluation
 parser.add_argument('--binning', type=int, default=0)
 
+parser.add_argument('--bn', type=int, default=0, help='Whether or not to adapt batchnorm statistics.')
+
 # Data args
 parser.add_argument('--dataset', type=str, default='celeba', choices=['celeba'])
 parser.add_argument('--data_dir', type=str, default='../data/')
@@ -63,7 +65,7 @@ parser.add_argument('--data_dir', type=str, default='../data/')
 # CelebA Data (from DRNN paper)
 parser.add_argument('--target_resolution', type=int, default=224,
                     help='Resize image to this size before feeding in to model')
-parser.add_argument('--target_name', type=str, default='Blond_Hair',
+parser.add_argument('--target_name', type=str, nargs='+', default=['Blond_Hair'],
                     help='The y value we are trying to predict')
 parser.add_argument('--confounder_names', type=str, nargs='+',
                     default=['Male'],
@@ -186,6 +188,7 @@ def main():
     # Get model
     model = utils.get_model(args, image_shape=train_loader.dataset.image_shape)
     model = model.to(args.device)
+#     model = nn.DataParallel(model)
 
     # Loss Fn
     if args.use_robust_loss:

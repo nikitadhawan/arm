@@ -1,3 +1,7 @@
+# python train_recall.py --num_epochs 400 --optimizer sgd --pretrained 0 --dataset femnist --meta_batch_size 2 --support_size 50 --sampling_type meta_batch_groups --uniform_over_groups 1 --n_test_per_dist 2000 --seed $SEED --experiment_name femnist_recall_$SEED --log_wandb 1 --step_size 0.4
+
+
+
 import os
 from datetime import datetime
 import argparse
@@ -15,6 +19,8 @@ from dro_loss import LossComputer
 
 import data
 import utils
+
+from maml import MAML
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = "TRUE"
 
@@ -105,6 +111,13 @@ parser.add_argument('--num_workers', type=int, default=8, help='Num workers for 
 parser.add_argument('--pin_memory', type=int, default=1, help='Pytorch loader pin memory. \
                     Best practice is to use this')
 
+parser.add_argument('--step_size', type=float, default=0.1,
+        help='Size of the fast adaptation step, ie. learning rate in the '
+        'gradient descent update (default: 0.1).')
+parser.add_argument('--num_steps', type=int, default=1,
+        help='Number of fast adaptation steps, ie. gradient descent '
+        'updates (default: 1).')
+
 args = parser.parse_args()
 
 if 'group' in args.sampling_type and not args.eval_corners_only:
@@ -155,30 +168,31 @@ def main():
         random.seed(args.seed)
 
     # Get data
-    import ipdb; ipdb.set_trace()
     train_loader, train_eval_loader, val_loader, _ = data.get_loaders(args)
+    z_loader = data.get_z_loader(args)
     args.n_groups = train_loader.dataset.n_groups
 
-
     # Get model
-    model = utils.get_model(args, image_shape=train_loader.dataset.image_shape)
-    model = model.to(args.device)
+    if args.dataset == 'mnist':
+        num_classes = 10
+    elif args.dataset in 'celeba':
+        num_classes = 4
+    elif args.dataset == 'femnist':
+        num_classes = 62
+    model = utils.MetaConvModel(train_loader.dataset.image_shape[0], num_classes, hidden_size=128, feature_size=128)
+    z_model = utils.MetaConvModel(train_loader.dataset.image_shape[0], train_loader.dataset.n_groups, hidden_size=128, feature_size=128)
+#     model = utils.get_model(args, image_shape=train_loader.dataset.image_shape)
 
     # Loss Fn
-    if args.use_robust_loss:
-        loss_fn = nn.CrossEntropyLoss(reduction='none')
-        loss_computer = LossComputer(loss_fn, is_robust=True,
-                                     dataset=train_loader.dataset,
-                                     step_size=args.robust_step_size,
-                                     device=args.device,
-                                     args=args)
-    else:
-        loss_fn = nn.CrossEntropyLoss()
+    loss_fn = nn.CrossEntropyLoss()
 
     # Optimizer
     if args.optimizer == 'adam': # This is used for MNIST.
         optimizer = torch.optim.Adam(model.parameters(),
                                     lr=args.learning_rate)
+        
+        z_optimizer = torch.optim.Adam(z_model.parameters(),
+                                    lr=1e-3)
     elif args.optimizer == 'sgd':
 
         # From DRNN paper
@@ -187,7 +201,21 @@ def main():
             lr=args.learning_rate,
             momentum=0.9,
             weight_decay=args.weight_decay)
+        
+        z_optimizer = torch.optim.SGD(
+            filter(lambda p: p.requires_grad, z_model.parameters()),
+            lr=args.learning_rate,
+            momentum=0.9,
+            weight_decay=args.weight_decay)
 
+#     import ipdb; ipdb.set_trace()
+    maml_model = MAML(model, z_model, z_loader, optimizer, z_optimizer, num_adaptation_steps=args.num_steps, step_size=args.step_size, loss_function=loss_fn, device=args.device)
+        
+    z_epochs = 50
+    for epoch in trange(z_epochs):
+            loss, accuracy = maml_model.train_z_iter(train_loader)
+            print(epoch, 'epoch ,', loss, 'z_loss ,', accuracy, 'z_accuracy')
+    
     # Train loop
     best_worst_case_acc = 0
     best_worst_case_acc_epoch = 0
@@ -195,38 +223,11 @@ def main():
     empirical_val_acc = 0
 
     for epoch in trange(args.num_epochs):
-        total_loss = 0
-        total_accuracy = 0
-        total_examples = 0
-
-        model.train()
-
-        for batch_id, (images, labels, group_ids) in enumerate(tqdm(train_loader, desc='train loop')):
-
-            # Put on GPU
-            images = images.to(args.device)
-            labels = labels.to(args.device)
-
-            # Forward
-            logits = model(images)
-            if args.use_robust_loss:
-                group_ids = group_ids.to(args.device)
-                loss = loss_computer.loss(logits, labels, group_ids,
-                                          is_training=True)
-            else:
-                loss = loss_fn(logits, labels)
-
-            # Evaluate
-            preds = np.argmax(logits.detach().cpu().numpy(), axis=1)
-            accuracy = np.sum(preds == labels.detach().cpu().numpy().reshape(-1))
-            total_accuracy += accuracy * labels.shape[0]
-            total_loss += loss.item() * labels.shape[0]
-            total_examples += labels.shape[0]
-
-            # Backprop
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+        
+        train_results = maml_model.train(train_loader, 
+                                         verbose=True, 
+                                         desc='Training', 
+                                         leave=False)
 
 
         # Decay learning rate after one epoch
@@ -237,12 +238,14 @@ def main():
                     
 #         import ipdb; ipdb.set_trace()
         if epoch % args.epochs_per_eval == 0:
+
+            # validation
+            worst_case_acc, stats = maml_model.evaluate(val_loader, 
+                                                        epoch=epoch,
+                                                        log_wandb=args.log_wandb,
+                                                        n_samples_per_dist=args.n_test_per_dist, 
+                                                        split='val') 
             
-            if args.dataset in ['mnist', 'femnist']: # Faster eval for small
-                worst_case_acc, stats = utils.evaluate_groups(args, model, val_loader, epoch, split='val') # validation                           
-            else:
-                worst_case_acc, stats = utils.evaluate_groups_large_dataset(args, model, val_loader, epoch, split='val') 
-             
             # Track early stopping values with respect to worst case.
             if worst_case_acc > best_worst_case_acc:
                 best_worst_case_acc = worst_case_acc
@@ -251,9 +254,9 @@ def main():
 
             # Log early stopping values
             if args.log_wandb:
-                wandb.log({"Train Loss": total_loss / total_examples,
+                wandb.log({"Train Loss": train_results['mean_outer_loss'],
                             "Best Worst Case Val Acc": best_worst_case_acc,
-                           "Train Accuracy": total_accuracy / total_examples, "epoch": epoch})
+                           "Train Accuracy": train_results['accuracy_after'], "epoch": epoch})
 
             print(f"Epoch: ", epoch, "Worst Case Acc: ", worst_case_acc)
 
@@ -262,7 +265,7 @@ def save_model(model ,ckpt_dir, epoch, device):
     ckpt_path = ckpt_dir / f'{epoch}_weights.pkl'
     model_state = model.to('cpu').state_dict(),
 
-    # Overwriste best_weights.pkl with the latest.
+    # Overwrite best_weights.pkl with the latest.
     torch.save(model_state, ckpt_path)
     ckpt_path = ckpt_dir / f'best_weights.pkl'
     torch.save(model_state, ckpt_path)
