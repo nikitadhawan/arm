@@ -26,7 +26,7 @@ class CelebADataset(Dataset):
 
     def __init__(self, split, root_dir, target_name, confounder_names,
                   augment_data=False, target_resolution=None, loading_type='PIL',
-                 skew_group_ids=[], crop_type=0):
+                 skew_group_ids=[], crop_type=0, include_label=False):
         self.root_dir = Path(root_dir) / 'celeba'
         self.target_name = target_name
         self.confounder_names = confounder_names
@@ -35,6 +35,7 @@ class CelebADataset(Dataset):
         self.crop_type = crop_type
         self.image_shape = (3, target_resolution, target_resolution)
         self.split = split
+        self.include_label = include_label
 
         # Read in attributes
         self.attrs_df = pd.read_csv(
@@ -55,7 +56,7 @@ class CelebADataset(Dataset):
         self.split_array = self.split_df['partition'].values
 
         # Split out filenames and attribute names
-        self.data_dir = self.root_dir / 'img_align_celeba'
+        self.data_dir = self.root_dir / 'img_align_celeba/img_align_celeba'
         self.filename_array = self.attrs_df['image_id'].values
         self.attrs_df = self.attrs_df.drop(labels='image_id', axis='columns')
         self.attr_names = self.attrs_df.columns.copy()
@@ -66,10 +67,13 @@ class CelebADataset(Dataset):
         self.attrs_df[self.attrs_df == -1] = 0
 
         # Get the y values
-        target_idx = self.attr_idx(self.target_name)
+        target_idx = [self.attr_idx(a) for a in self.target_name]
+        self.n_labels = len(target_idx)
         self.y_array = self.attrs_df[:, target_idx]
-        self.n_classes = 2
+        self.y_array = self.y_array @ np.power(2, np.arange(self.n_labels))
+        self.n_classes = np.power(2, self.n_labels)
 
+#         import ipdb; ipdb.set_trace()
         # Map the confounder attributes to a number 0,...,2^|confounder_idx|-1
         self.confounder_idx = [self.attr_idx(a) for a in self.confounder_names]
         self.n_confounders = len(self.confounder_idx)
@@ -78,14 +82,28 @@ class CelebADataset(Dataset):
 
         self.confounder_array = confounder_id
 
-        self.n_groups = self.n_classes * pow(2, len(self.confounder_idx))
-        self.group_ids = (self.y_array*(self.n_groups/2) + self.confounder_array).astype('int')
+        if self.include_label:
+            self.n_groups = self.n_classes * pow(2, len(self.confounder_idx))
+            self.group_ids = (self.y_array*(self.n_groups/2) + self.confounder_array).astype('int')
+        else:
+            self.n_groups = pow(2, len(self.confounder_idx))
+            self.group_ids = self.confounder_array.astype('int')
 
+        self.groups = list(range(self.n_groups))
         self.group_counts, bin_edges = np.histogram(self.group_ids, bins=range(self.n_groups+1), density=False)
+#         total = self.n_groups
+#         counts = np.copy(self.group_counts)
+#         bins = []
+#         for i in range(total):
+#             if counts[i] == 0:
+#                 self.n_groups -= 1
+#                 self.group_counts = np.delete(self.group_counts, i)
+#             bins.append(i)
+#         bins.append(i+1)
+#         bins = np.array(bins)        
         self.group_dist, bin_edges = np.histogram(self.group_ids, bins=range(self.n_groups+1), density=True)
-
-        if np.sum(self.group_dist) != 1:
-            raise ValueError
+#         if np.sum(self.group_dist) != 1:
+#             raise ValueError
 
         ########################
         #### Dataset stats ####
@@ -145,7 +163,7 @@ class CelebADataset(Dataset):
 
         orig_w = 178
         orig_h = 218
-        orig_min_dim = int(min(orig_w, orig_h))
+        orig_min_dim = 80 #int(min(orig_w, orig_h))
 
         if crop_type == CROP_RESIZE:
             transform = albumentations.Compose([

@@ -48,6 +48,18 @@ class FEMNISTDataset(Dataset):
         print("loading femnist")
         for i, client in enumerate(clients):
             client_X, client_y = data[client]['x'], data[client]['y']
+            
+#             client_N = len(client_X)
+#             if split == 'train' or split == 'val':
+#                 np.random.seed(0)
+#                 num_val = client_N//10
+#                 val_idx = np.random.randint(low=0, high=client_N, size=num_val)
+#                 train_idx = np.setdiff1d(np.arange(client_N), val_idx)
+#             if split == 'train':
+#                 client_X, client_y = [client_X[a] for a in train_idx], [client_y[a] for a in train_idx]
+#             elif split == 'val':
+#                 client_X, client_y = [client_X[a] for a in val_idx], [client_y[a] for a in val_idx]
+            
             assert len(client_X) == len(client_y), 'malformed user data'
             client_N = len(client_X)
             X_processed = np.array(client_X).reshape((client_N, 28, 28, 1))

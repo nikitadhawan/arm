@@ -201,7 +201,7 @@ class StaticMNIST(Dataset):
         label = torch.tensor(label, dtype=torch.long)
 
 
-        group_id = self.group_ids[index]
+        group_id = self.group_ids[rotation_index]
 
 
         return img, label, group_id

@@ -145,3 +145,16 @@ def get_loaders(args):
 
     return train_loader, train_eval_loader, val_loader, test_loader
 
+def get_z_loader(args):
+    dataset, _, _ = get_dataset(args)
+    batch_size = args.meta_batch_size * args.support_size
+    z_loader = get_loader(dataset, sampling_type='meta_batch_mixtures',
+                              batch_size=batch_size,
+                              meta_batch_size=1,
+                              support_size=args.support_size,
+                              shuffle=args.shuffle_train,
+                              pin_memory=args.pin_memory, num_workers=args.num_workers,
+                              args=args)
+    return z_loader
+    
+

@@ -17,7 +17,10 @@ def evaluate_groups(args, model, loader, epoch=None, split='val', n_samples_per_
     num_examples = []
     accuracies = np.zeros(len(loader.dataset.groups))
 
-    model.eval()
+    if args.bn:
+        model.train()
+    else:
+        model.eval()
 
     if n_samples_per_dist is None:
         n_samples_per_dist = args.n_test_per_dist
@@ -151,14 +154,19 @@ def eval_dist(dist, model, loader, args, n_samples_per_dist):
 def eval_dists_fn(split, args, model, loader, dists, n_samples_per_dist=1500):
     """ Evaluates modl on a set of mixture distributions """
     accuracies = np.zeros(len(dists))
+    num_examples = []
     counter = 0
     for dist_id, dist in enumerate(tqdm(dists, f"{split}_evaluation")):
 
         preds_all, labels_all = eval_dist(dist, model, loader, args, n_samples_per_dist)
+        num_examples.append(len(preds_all))
         accuracies[dist_id] = np.mean(preds_all == labels_all)
         counter += len(labels_all)
+        
+    for a in zip(accuracies, num_examples):
+        print(a)
 
-    return accuracies
+    return accuracies, num_examples[np.argmin(accuracies)]
 
 
 def evaluate_each_corner(args, model, loader, split):
@@ -295,7 +303,7 @@ def evaluate_mixtures(args, model, loader, dists, epoch=None, split='val'):
             stats['epoch'] = epoch
 
     else:
-        accuracies = eval_dists_fn(split, args, model, loader, dists, n_samples_per_dist=n_samples_per_dist)
+        accuracies, worst_case_group_size = eval_dists_fn(split, args, model, loader, dists, n_samples_per_dist=n_samples_per_dist)
 
 
         ### Log wandb ###
@@ -317,6 +325,7 @@ def evaluate_mixtures(args, model, loader, dists, epoch=None, split='val'):
         empirical_case_acc = accuracies[-1]
         stats = {f"worst_case_{split}_all_acc": worst_case_acc,
                    f"avg_{split}_acc": avg_acc,
+                   f'worst_case_group_size_{split}': worst_case_group_size,
                    f"empirical_{split}_acc": empirical_case_acc}
 
         if args.n_test_dists > 0:
@@ -330,3 +339,98 @@ def evaluate_mixtures(args, model, loader, dists, epoch=None, split='val'):
         wandb.log(stats)
 
     return worst_case_acc, avg_acc, empirical_case_acc, stats
+
+
+
+def evaluate_groups_large_dataset(args, model, loader, epoch=None, split='val', n_samples_per_dist=None):
+    """ Test model on groups and log to wandb
+
+        Separate script for celeba and larger datasets for speed."""
+
+    groups = []
+    num_examples = []
+    accuracies = np.zeros(len(loader.dataset.groups))
+
+    model.eval()
+
+    if n_samples_per_dist is None:
+        n_samples_per_dist = args.n_test_per_dist
+
+    for i, group in tqdm(enumerate(loader.dataset.groups), desc='Evaluating', total=len(loader.dataset.groups)):
+        dist_id = group
+
+        preds_all = []
+        labels_all = []
+
+        counter = 0
+        if loader.dataset.group_counts[group] == 0:
+            num_examples.append(0)
+            accuracies[dist_id] = 0
+            groups.append(group)
+            continue;
+
+        loader.batch_sampler.set_group(group)
+        for images, labels, group_id in loader:
+
+            labels = labels.detach().numpy()
+            images = images.to(args.device)
+
+            logits = model(images).detach().cpu().numpy()
+            preds = np.argmax(logits, axis=1)
+
+            preds_all.append(preds)
+            labels_all.append(labels)
+            counter += len(images)
+
+            if counter >= n_samples_per_dist:
+                break
+
+        preds_all = np.concatenate(preds_all)
+        labels_all = np.concatenate(labels_all)
+
+        # Evaluate
+        accuracy = np.mean(preds_all == labels_all)
+
+        num_examples.append(len(preds_all))
+        accuracies[dist_id] = accuracy
+        groups.append(group)
+
+        if args.log_wandb:
+            if epoch is None:
+                wandb.log({f"{split}_acc": accuracy, # Gives us Acc vs Group Id
+                           "dist_id": group})
+            else:
+                wandb.log({f"{split}_acc_e{epoch}": accuracy, # Gives us Acc vs Group Id
+                           "dist_id": group})
+
+#     import ipdb; ipdb.set_trace()
+#     accuracies = accuracies[accuracies!=0]
+#     num_examples = np.array(num_examples)
+#     num_examples = num_examples[num_examples!=0]
+    # Log worst, average and empirical accuracy
+    worst_case_acc = np.amin(accuracies)
+    worst_case_group_size = num_examples[np.argmin(accuracies)]
+
+    num_examples = np.array(num_examples)
+    props = num_examples / num_examples.sum()
+    empirical_case_acc = accuracies.dot(props)
+    average_case_acc = np.mean(accuracies)
+
+    total_size = num_examples.sum()
+    
+    for a in zip(accuracies, num_examples):
+        print(a)
+
+    stats = {f'worst_case_{split}_acc': worst_case_acc,
+            f'worst_case_group_size_{split}': worst_case_group_size,
+            f'average_{split}_acc': average_case_acc,
+            f'total_size_{split}': total_size,
+            f'empirical_{split}_acc': empirical_case_acc}
+
+    if epoch is not None:
+        stats['epoch'] = epoch
+
+    if args.log_wandb:
+        wandb.log(stats)
+
+    return worst_case_acc, stats
