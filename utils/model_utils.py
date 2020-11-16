@@ -12,6 +12,10 @@ def get_model(args, image_shape):
         num_classes = 4
     elif args.dataset == 'femnist':
         num_classes = 62
+    elif args.dataset == 'tinyimagenet':
+        num_classes = 200
+    elif args.dataset == 'cifar':
+        num_classes = 10
 
     # This is the one used in the paper
     if args.bn:
@@ -30,7 +34,7 @@ def get_model(args, image_shape):
     return model
 
 
-import torch.nn as nn
+"""import torch.nn as nn
 
 from collections import OrderedDict
 from torchmeta.modules import (MetaModule, MetaConv2d, MetaBatchNorm2d,
@@ -47,7 +51,7 @@ def conv_block(in_channels, out_channels, **kwargs):
     ]))
 
 class MetaConvModel(MetaModule):
-    """4-layer Convolutional Neural Network architecture from [1].
+   """ """4-layer Convolutional Neural Network architecture from [1].
     Parameters
     ----------
     in_channels : int
@@ -63,7 +67,7 @@ class MetaConvModel(MetaModule):
     .. [1] Finn C., Abbeel P., and Levine, S. (2017). Model-Agnostic Meta-Learning
            for Fast Adaptation of Deep Networks. International Conference on
            Machine Learning (ICML) (https://arxiv.org/abs/1703.03400)
-    """
+   """ """
     def __init__(self, in_channels, out_features, hidden_size=64, feature_size=64):
         super(MetaConvModel, self).__init__()
         self.in_channels = in_channels
@@ -88,4 +92,4 @@ class MetaConvModel(MetaModule):
         features = features.view((features.size(0), -1))
         logits = self.classifier(features, params=self.get_subdict(params, 'classifier'))
         return logits
-
+"""

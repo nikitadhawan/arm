@@ -58,10 +58,25 @@ def evaluate_groups(args, model, loader, epoch=None, split='val', n_samples_per_
             labels = labels.detach().numpy()
             images = images.to(args.device)
 
-            logits = model(images)
+            if args.bn:
+                logits = model(images)
+            else:
+                logits = model(images)
             if len(logits.shape) == 1:
                 logits = logits.unsqueeze(0)
 
+#             if counter == 0:
+#                 import matplotlib
+#                 matplotlib.use("Agg")
+#                 import matplotlib.pyplot as plt
+#                 pl = activations.detach().cpu().numpy()[1, :, 0]
+#                 pts = np.random.normal(0,1,size=len(pl))
+#                 plt.figure()
+# #                 plt.ylim(top=100)
+#                 plt.hist(pts, 100, alpha=0.5)
+#                 plt.hist(pl, 100, alpha=0.5)
+#                 plt.savefig('two.png')
+#                 plt.close()
             logits = logits.detach().cpu().numpy()
             preds = np.argmax(logits, axis=1)
 
@@ -113,7 +128,7 @@ def evaluate_groups(args, model, loader, epoch=None, split='val', n_samples_per_
     if args.log_wandb:
         wandb.log(stats)
 
-    return worst_case_acc, stats
+    return average_case_acc, stats
 
 
 ##########################################
@@ -351,7 +366,10 @@ def evaluate_groups_large_dataset(args, model, loader, epoch=None, split='val', 
     num_examples = []
     accuracies = np.zeros(len(loader.dataset.groups))
 
-    model.eval()
+    if args.bn:
+        model.train()
+    else:
+        model.eval()
 
     if n_samples_per_dist is None:
         n_samples_per_dist = args.n_test_per_dist

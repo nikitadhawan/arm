@@ -3,8 +3,11 @@ import torch
 
 from .celeba_dataset import CelebADataset
 from .static_mnist import StaticMNIST
+from .static_mnist_unknown import StaticMNISTUnknown
 from .femnist_dataset import FEMNISTDataset
-from . import static_mnist
+from .cifar_dataset import CIFARDataset
+from .tinyimagenet_dataset import ImageNetDataset
+from . import static_mnist_unknown
 from .samplers import ClusteredMixSampler, ConstantMixSampler, ConstantGroupSampler, ClusteredGroupSampler
 
 def get_one_hot(values, num_classes):    # putting this here for now so you can get it working in one copy paste
@@ -103,12 +106,22 @@ def get_dataset(args):
         train_dataset = FEMNISTDataset('train', args.data_dir)
         val_dataset = FEMNISTDataset('val', args.data_dir)
         test_dataset = FEMNISTDataset('test', args.data_dir)
+        
+    elif args.dataset == 'cifar':
+        train_dataset = CIFARDataset('train', args.data_dir)
+        val_dataset = CIFARDataset('val', args.data_dir)
+        test_dataset = CIFARDataset('test', args.data_dir)
+        
+    elif args.dataset == 'tinyimagenet':
+        train_dataset = ImageNetDataset('train', args.data_dir)
+        val_dataset = ImageNetDataset('val', args.data_dir)
+        test_dataset = ImageNetDataset('test', args.data_dir)
 
     elif args.dataset == 'mnist':
-        train, val, test = static_mnist.get_data()
-        train_dataset = StaticMNIST(train, 'train')
-        val_dataset = StaticMNIST(val, 'val')
-        test_dataset = StaticMNIST(test, 'test')
+        train, val, test = static_mnist_unknown.get_data()
+        train_dataset = StaticMNISTUnknown(train, 'train', args)
+        val_dataset = StaticMNISTUnknown(val, 'val', args)
+        test_dataset = StaticMNISTUnknown(test, 'test', args)
 
     return train_dataset, val_dataset, test_dataset
 

@@ -55,7 +55,7 @@ parser.add_argument('--bn', type=int, default=0, help='Whether or not to adapt b
 
 
 # Data args
-parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist', 'femnist', 'celeba'])
+parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist', 'femnist', 'celeba', 'cifar', 'tinyimagenet'])
 parser.add_argument('--data_dir', type=str, default='../data/')
 
 # Data sampling
@@ -155,7 +155,7 @@ def main():
         random.seed(args.seed)
 
     # Get data
-    import ipdb; ipdb.set_trace()
+#    import ipdb; ipdb.set_trace()
     train_loader, train_eval_loader, val_loader, _ = data.get_loaders(args)
     args.n_groups = train_loader.dataset.n_groups
 
@@ -204,6 +204,7 @@ def main():
         for batch_id, (images, labels, group_ids) in enumerate(tqdm(train_loader, desc='train loop')):
 
             # Put on GPU
+#            import ipdb; ipdb.set_trace()
             images = images.to(args.device)
             labels = labels.to(args.device)
 
@@ -227,6 +228,7 @@ def main():
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+                            
 
 
         # Decay learning rate after one epoch
@@ -238,7 +240,7 @@ def main():
 #         import ipdb; ipdb.set_trace()
         if epoch % args.epochs_per_eval == 0:
             
-            if args.dataset in ['mnist', 'femnist']: # Faster eval for small
+            if args.dataset in ['mnist', 'femnist', 'cifar']: # Faster eval for small
                 worst_case_acc, stats = utils.evaluate_groups(args, model, val_loader, epoch, split='val') # validation                           
             else:
                 worst_case_acc, stats = utils.evaluate_groups_large_dataset(args, model, val_loader, epoch, split='val') 
@@ -246,8 +248,10 @@ def main():
             # Track early stopping values with respect to worst case.
             if worst_case_acc > best_worst_case_acc:
                 best_worst_case_acc = worst_case_acc
-
                 save_model(model, ckpt_dir, epoch, args.device)
+
+#             if epoch % 5 == 0:
+#                 save_model(model, ckpt_dir, epoch, args.device)
 
             # Log early stopping values
             if args.log_wandb:
@@ -263,7 +267,7 @@ def save_model(model ,ckpt_dir, epoch, device):
     model_state = model.to('cpu').state_dict(),
 
     # Overwriste best_weights.pkl with the latest.
-    torch.save(model_state, ckpt_path)
+#     torch.save(model_state, ckpt_path)
     ckpt_path = ckpt_dir / f'best_weights.pkl'
     torch.save(model_state, ckpt_path)
     model.to(device)

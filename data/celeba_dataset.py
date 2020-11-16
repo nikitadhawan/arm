@@ -163,7 +163,7 @@ class CelebADataset(Dataset):
 
         orig_w = 178
         orig_h = 218
-        orig_min_dim = 80 #int(min(orig_w, orig_h))
+        orig_min_dim = 70 #int(min(orig_w, orig_h))
 
         if crop_type == CROP_RESIZE:
             transform = albumentations.Compose([

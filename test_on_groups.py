@@ -74,7 +74,7 @@ def test(args, eval_on):
     model = model.to(args.device)
     model.eval()
 
-    if args.dataset in ['mnist', 'femnist']:
+    if args.dataset in ['mnist', 'femnist', 'cifar', 'tinyimagenet']:
         if eval_on == 'train':
             worst_case_acc, stats = utils.evaluate_groups(args, model, train_eval_loader, split='train')
         elif eval_on == 'val':
@@ -115,7 +115,7 @@ parser.add_argument('--n_context_channels', type=int, default=3, help='Used when
 parser.add_argument('--use_context', type=int, default=0)
 
 # Data args
-parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist','celeba','femnist'])
+parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist','celeba','femnist', 'cifar', 'tinyimagenet'])
 parser.add_argument('--data_dir', type=str, default='../data/')
 
 # CelebA Data
@@ -193,8 +193,6 @@ if __name__ == "__main__":
         args.cuda = False
 
     # Check if checkpoints exist
-    for ckpt_folder in args.ckpt_folders:
-        ckpt_path = Path('output') / 'checkpoints' / ckpt_folder / f'best_weights.pkl'
         state_dict = torch.load(ckpt_path)
         print("Found: ", ckpt_path)
 
@@ -203,7 +201,7 @@ if __name__ == "__main__":
     for i, ckpt_folder in enumerate(args.ckpt_folders):
 
         args.seed = i + 10 # Mainly to make sure seed for training and testing is not the same. Not critical.
-        args.ckpt_path = Path('output') / 'checkpoints' / ckpt_folder / f'best_weights.pkl'
+        args.ckpt_path = ckpt_folder #Path('output') / 'checkpoints' / ckpt_folder / f'best_weights.pkl'
         args.experiment_name += f'_{args.seed}'
 
         if args.log_wandb and i != 0:
