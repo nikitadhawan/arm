@@ -100,14 +100,20 @@ class ClusteredGroupSampler:
     """
 
     def __init__(self, dataset, meta_batch_size, support_size,
-                 drop_last=None, uniform_over_groups=True):
+                 drop_last=None, uniform_over_groups=True, learned_groups=False):
 
         self.dataset = dataset
         self.indices = range(len(dataset))
+        self.use_learned_groups = learned_groups
 
-        self.group_ids = dataset.group_ids
-        self.groups = dataset.groups
-        self.num_groups = dataset.n_groups
+        if self.use_learned_groups:
+            self.learned_groups = dataset.learned_groups
+            self.num_groups = self.learned_groups.shape[0]
+            self.groups = list(range(self.learned_groups.shape[0]))
+        else:
+            self.group_ids = dataset.group_ids
+            self.groups = dataset.groups
+            self.num_groups = dataset.n_groups
 
         self.meta_batch_size = meta_batch_size
         self.support_size = support_size
@@ -121,32 +127,50 @@ class ClusteredGroupSampler:
 
         # group_count will have one entry per group
         # with the size of the group
-        self.group_count = []
-        for group_id in self.groups:
-            ids = np.nonzero(self.group_ids == group_id)[0]
-            self.group_count.append(len(ids))
-            self.groups_with_ids[group_id] = ids
+        if not self.use_learned_groups:
+            self.group_count = []
+            for group_id in self.groups:
+                ids = np.nonzero(self.group_ids == group_id)[0]
+                self.group_count.append(len(ids))
+                self.groups_with_ids[group_id] = ids
 
-        self.group_count = np.array(self.group_count)
-        self.group_prob = self.group_count / np.sum(self.group_count)
+            self.group_count = np.array(self.group_count)
+            self.group_prob = self.group_count / np.sum(self.group_count)
         self.uniform_over_groups = uniform_over_groups
 
     def __iter__(self):
 
         n_batches = len(self.dataset) // self.batch_size
-        if self.uniform_over_groups:
-            sampled_groups = np.random.choice(self.groups, size=(n_batches, self.meta_batch_size))
-        else:
-            # Sample groups according to the size of the group
-            sampled_groups = np.random.choice(self.groups, size=(n_batches, self.meta_batch_size), p=self.group_prob)
+        if not self.use_learned_groups:   
+            if self.uniform_over_groups:
+                sampled_groups = np.random.choice(self.groups, size=(n_batches, self.meta_batch_size))
+            else:
+                # Sample groups according to the size of the group
+                sampled_groups = np.random.choice(self.groups, size=(n_batches, self.meta_batch_size), p=self.group_prob)
 
         for batch_id in range(self.num_batches):
 
+            if self.use_learned_groups:
+                grouping = np.random.choice(self.groups)
+                self.group_ids = self.learned_groups[grouping]
+                self.group_count = []
+                for group_id in self.groups:
+                    ids = np.nonzero(self.group_ids == group_id)[0]
+                    self.group_count.append(len(ids))
+                    self.groups_with_ids[group_id] = ids
+                self.group_count = np.array(self.group_count)
+                self.group_prob = self.group_count / np.sum(self.group_count)
+                if self.uniform_over_groups:
+                    sampled_groups = np.random.choice(self.groups, size=(n_batches, self.meta_batch_size))
+                else:
+                    # Sample groups according to the size of the group
+                    sampled_groups = np.random.choice(self.groups, size=(n_batches, self.meta_batch_size), p=self.group_prob)
+         
             sampled_ids = [np.random.choice(self.groups_with_ids[sampled_groups[batch_id, sub_batch]],
-                                size=self.support_size,
-                                replace=True,
-                                p=None)
-                                for sub_batch in range(self.meta_batch_size)]
+                            size=self.support_size,
+                            replace=True,
+                            p=None)
+                            for sub_batch in range(self.meta_batch_size)]
 
             # Flatten
             sampled_ids = np.concatenate(sampled_ids)

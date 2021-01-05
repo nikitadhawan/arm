@@ -8,28 +8,34 @@ def get_model(args, image_shape):
 
     if args.dataset == 'mnist':
         num_classes = 10
+        num_domains = 14
     elif args.dataset in ('celeba'):
         num_classes = 4
+        num_domains = 4
     elif args.dataset == 'femnist':
         num_classes = 62
+        num_domains = 262
     elif args.dataset == 'tinyimagenet':
         num_classes = 200
+        num_domains = 51
     elif args.dataset == 'cifar':
         num_classes = 10
+        num_domains = 56
 
     # This is the one used in the paper
     if args.bn:
 #         import ipdb; ipdb.set_trace()
         print("using BNConvNet")
         model = models.BNConvNet(num_channels, bn_track_running_stats=False,
-             num_classes=num_classes, support_size=args.support_size,
+             num_classes=num_classes, num_domains=num_domains, 
+                                 support_size=args.support_size,
                                      prediction_net=args.prediction_net,
-                                     pretrained=args.pretrained, context_net=args.context_net)
+                                     pretrained=args.pretrained, context_net=args.context_net, return_features=args.return_features)
     else:
         model = models.ContextualConvNet(num_channels, n_context_channels=args.n_context_channels,
-             num_classes=num_classes, support_size=args.support_size, use_context=args.use_context,
+             num_classes=num_classes, num_domains=num_domains, support_size=args.support_size, use_context=args.use_context,
                                      prediction_net=args.prediction_net,
-                                     pretrained=args.pretrained, context_net=args.context_net)
+                                     pretrained=args.pretrained, context_net=args.context_net, return_features=args.return_features)
 
     return model
 

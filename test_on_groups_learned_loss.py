@@ -12,17 +12,15 @@ from tqdm import trange, tqdm
 import wandb
 from sklearn import metrics
 from dro_loss import LossComputer
+import models
+import higher
 
 import data
 import utils
 
-def get_one_hot(values, num_classes):
-    return np.eye(num_classes)[values]
 
-
-def evaluate_groups(args, model, loader, epoch=None, learned_loss=None, inner_opt=None, split='val', n_samples_per_dist=None):
+def evaluate_groups_with_learned_loss(args, model, loader, epoch=None, learned_loss=None, inner_opt=None, split='val',  n_samples_per_dist=None):
     """ Test model on groups and log to wandb
-
         Separate script for femnist for speed."""
 
     groups = []
@@ -33,126 +31,112 @@ def evaluate_groups(args, model, loader, epoch=None, learned_loss=None, inner_op
 
     if n_samples_per_dist is None:
         n_samples_per_dist = args.n_test_per_dist
-        
-    N = 25
-
-    n_groups = len(loader.dataset.groups)
-    correct = np.zeros((n_groups, N, args.n_test_per_dist))
-
-    # scheduler = torch.optim.lr_scheduler.StepLR(inner_opt, step_size=0.01)
 
     for i, group in tqdm(enumerate(loader.dataset.groups), desc='Evaluating', total=len(loader.dataset.groups)):
+        dist_id = group
 
-        model.train()
+        preds_all = []
+        labels_all = []
 
-        for j in range(N):
-            args.seed = j
+        example_ids = np.nonzero(loader.dataset.group_ids == group)[0]
+        example_ids = example_ids[np.random.permutation(len(example_ids))] # Shuffle example ids
 
-            dist_id = group
-
-            preds_all = []
-            labels_all = []
-
-            example_ids = np.nonzero(loader.dataset.group_ids == group)[0]
-            example_ids = example_ids[np.random.permutation(len(example_ids))] # Shuffle example ids
-
-            # Create batches
-            batches = []
-            X, Y, G = [], [], []
-            counter = 0
-            for i, idx in enumerate(example_ids):
-                x, y, g = loader.dataset[idx]
-                X.append(x); Y.append(y); G.append(g)
-                if (i + 1) % args.support_size == 0:
-                    X, Y, G = torch.stack(X), torch.tensor(Y, dtype=torch.long), torch.tensor(G, dtype=torch.long)
-                    batches.append((X, Y, G))
-                    X, Y, G = [], [], []
-
-                if i == (n_samples_per_dist - 1):
-                    break
-            if X:
+        # Create batches
+        batches = []
+        X, Y, G = [], [], []
+        counter = 0
+        for i, idx in enumerate(example_ids):
+            x, y, g = loader.dataset[idx]
+            X.append(x); Y.append(y); G.append(g)
+            if (i + 1) % args.support_size == 0:
                 X, Y, G = torch.stack(X), torch.tensor(Y, dtype=torch.long), torch.tensor(G, dtype=torch.long)
                 batches.append((X, Y, G))
+                X, Y, G = [], [], []
 
-            counter = 0
-            all_images, all_labels = [], []
+            if i == (n_samples_per_dist - 1):
+                break
+        if X:
+            X, Y, G = torch.stack(X), torch.tensor(Y, dtype=torch.long), torch.tensor(G, dtype=torch.long)
+            batches.append((X, Y, G))
 
-            for images, labels, group_id in batches:
-                for i in range(1, len(images)+1):
-                    images_curr = images[:i].to(args.device)
-                    labels_curr = labels[:i].detach().numpy()
-                    logits = model(images_curr)
-                    if len(logits.shape) == 1:
-                        logits = logits.unsqueeze(0)
-                    logits = logits.detach().cpu().numpy()
-                    preds = np.argmax(logits, axis=1)
-                    preds_all.append(preds[-1:])
-                    labels_all.append(labels_curr[-1:])
-                    counter = len(preds_all)
+        counter = 0
+        for images, labels, group_id in batches:
 
-                    if counter >= n_samples_per_dist:
-                        break
-              
-                   
-            preds_all = np.concatenate(preds_all)
-            labels_all = np.concatenate(labels_all)
+            labels = labels.detach().numpy()
+            images = images.to(args.device)
 
-            # j refers to seed
-            is_correct = preds_all == labels_all
-            correct[group, j, :] = is_correct
+            task_labels = labels
+            task_images = images
 
-            # Evaluate
-            accuracy = np.mean(preds_all == labels_all)
+            with higher.innerloop_ctx(
+                model, inner_opt, copy_initial_weights=True) as (fnet, diffopt):
 
-            num_examples.append(len(preds_all))
-            accuracies[dist_id] = accuracy
-            groups.append(dist_id)
+                # Inner loop adaptation
+                for _ in range(args.n_inner_iter):
+                    spt_logits = fnet(task_images)
+                    spt_loss = learned_loss(spt_logits)
+                    diffopt.step(spt_loss)
 
-            if args.log_wandb:
-                if epoch is None:
-                    wandb.log({f"{split}_acc": accuracy, # Gives us Acc vs Group Id
-                               "dist_id": dist_id})
-                else:
-                    wandb.log({f"{split}_acc_e{epoch}": accuracy, # Gives us Acc vs Group Id
-                               "dist_id": dist_id})
+                logits = fnet(task_images)
+                if len(logits.shape) == 1:
+                    logits = logits.unsqueeze(0)
+                logits = logits.detach().cpu().numpy()
 
-        # Log worst, average and empirical accuracy
-        worst_case_acc = np.amin(accuracies)
+                preds = np.argmax(logits, axis=1)
 
-    with open('streaming_bn.npy', 'wb') as f:
-        np.save(f, correct)
+            preds_all.append(preds)
+            labels_all.append(task_labels)
+            counter += len(task_images)
 
+            if counter >= n_samples_per_dist:
+                break
 
-    # group, seed, test_point
-    print("worst case acc:",  np.min(np.mean(correct, axis=(1,2))))
-    print(np.argmin(np.mean(correct, axis=(1,2))))
-    print("avg case acc:",  np.mean(np.mean(correct, axis=(1,2))))
+        preds_all = np.concatenate(preds_all)
+        labels_all = np.concatenate(labels_all)
 
-    #worst_case_group_size = num_examples[np.argmin(accuracies)]
+        # Evaluate
+        accuracy = np.mean(preds_all == labels_all)
 
-    #num_examples = np.array(num_examples)
-    #props = num_examples / num_examples.sum()
-    #empirical_case_acc = accuracies.dot(props)
-    #average_case_acc = np.mean(accuracies)
+        num_examples.append(len(preds_all))
+        accuracies[dist_id] = accuracy
+        groups.append(dist_id)
 
-    #total_size = num_examples.sum()
+        if args.log_wandb:
+            if epoch is None:
+                wandb.log({f"{split}_acc": accuracy, # Gives us Acc vs Group Id
+                           "dist_id": dist_id})
+            else:
+                wandb.log({f"{split}_acc_e{epoch}": accuracy, # Gives us Acc vs Group Id
+                           "dist_id": dist_id})
 
-    stats = {}
-    #stats = {f'worst_case_{split}_acc': worst_case_acc,
-    #        f'worst_case_group_size_{split}': worst_case_group_size,
-    #        f'average_{split}_acc': average_case_acc,
-    #        f'total_size_{split}': total_size,
-    #        f'empirical_{split}_acc': empirical_case_acc}
+    # Log worst, average and empirical accuracy
+    worst_case_acc = np.amin(accuracies)
+    worst_case_group_size = num_examples[np.argmin(accuracies)]
 
-    #if epoch is not None:
-    #    stats['epoch'] = epoch
+    num_examples = np.array(num_examples)
+    props = num_examples / num_examples.sum()
+    empirical_case_acc = accuracies.dot(props)
+    average_case_acc = np.mean(accuracies)
 
-    #if args.log_wandb:
-    #    wandb.log(stats)
+    total_size = num_examples.sum()
+
+    stats = {f'worst_case_{split}_acc': worst_case_acc,
+            f'worst_case_group_size_{split}': worst_case_group_size,
+            f'average_{split}_acc': average_case_acc,
+            f'total_size_{split}': total_size,
+            f'empirical_{split}_acc': empirical_case_acc}
+
+    if epoch is not None:
+        stats['epoch'] = epoch
+
+    if args.log_wandb:
+        wandb.log(stats)
 
     return worst_case_acc, stats
 
 
+def get_one_hot(values, num_classes):
+    return np.eye(num_classes)[values]
 
 def test(args, eval_on):
 
@@ -186,47 +170,44 @@ def test(args, eval_on):
 
     # Get model
     model = utils.get_model(args, image_shape=train_loader.dataset.image_shape)
-    state_dict = torch.load(args.ckpt_path)
-    if args.dataset == 'celeba' and args.use_context == 0:
-        # Remove unnecessary weights from the model.
-        new_state_dict = state_dict[0]
-        if "context_net.classifier.weight" in new_state_dict:
-            del new_state_dict["context_net.classifier.weight"]
-
-        if "context_net.classifier.bias" in new_state_dict:
-            del new_state_dict["context_net.classifier.bias"]
-
-        new_state_dict_2 = {}
-        for key in new_state_dict.keys():
-            new_key = key.replace('module.', '')
-            new_state_dict_2[new_key] = new_state_dict[key]
-        new_state_dict = new_state_dict_2
-
-        model.load_state_dict(new_state_dict)
-    else:
-        model.load_state_dict(state_dict[0])
+    state_dict = torch.load(args.ckpt_path)[0]
+    model.load_state_dict(state_dict)
 
     model = model.to(args.device)
-    model.eval()
+    model.train()
 
-    if args.dataset in ['mnist', 'femnist', 'cifar', 'tinyimagenet']:
-        if eval_on == 'train':
-            worst_case_acc, stats = utils.evaluate_groups(args, model, train_eval_loader, split='train')
-        elif eval_on == 'val':
-            worst_case_acc, stats = utils.evaluate_groups(args, model, val_loader, split='val')
-        elif eval_on == 'test':
-            worst_case_acc, stats = utils.evaluate_groups(args, model, test_loader, split='test')
-            
-    else:
-        if eval_on == 'train':
-            worst_case_acc, stats = utils.evaluate_groups_large_dataset(args, model, train_eval_loader, split='train')
-        elif eval_on == 'val':
-            worst_case_acc, stats = utils.evaluate_groups_large_dataset(args, model, val_loader, split='val')
-        elif eval_on == 'test':
-            worst_case_acc, stats = utils.evaluate_groups_large_dataset(args, model, test_loader, split='test')
+    if args.dataset == 'mnist':
+        num_classes = 10
+    elif args.dataset in ('celeba'):
+        num_classes = 2
+    elif args.dataset == 'femnist':
+        num_classes = 62
+    elif args.dataset == 'cifar':
+        num_classes = 10
+    elif args.dataset == 'tinyimagenet':
+        num_classes = 200
+
+    # Get learned loss
+    learned_loss = models.LearnedLoss(in_size=num_classes).to(args.device)
+    state_dict = torch.load(args.ckpt_path_learned_loss)[0]
+    learned_loss.load_state_dict(state_dict)
+    learned_loss.to(args.device)
+
+
+    inner_opt = torch.optim.SGD(model.parameters(),
+                            lr=1e-1) # TODO Undo hardcoding
+
+    if eval_on == 'train':
+        worst_case_acc, stats = evaluate_groups_with_learned_loss(args, model, train_eval_loader,
+                learned_loss=learned_loss, inner_opt=inner_opt, split='train')
+    elif eval_on == 'val':
+        worst_case_acc, stats = evaluate_groups_with_learned_loss(args, model, val_loader,
+                learned_loss=learned_loss, inner_opt=inner_opt, split='val')
+    elif eval_on == 'test':
+        worst_case_acc, stats = evaluate_groups_with_learned_loss(args, model, test_loader,
+                learned_loss=learned_loss, inner_opt=inner_opt, split='test')
 
     return worst_case_acc, stats
-
 
 #################
 ### Arguments ###
@@ -242,13 +223,13 @@ parser.add_argument('--ckpt_path', type=str, default=None)
 
 parser.add_argument('--pretrained', type=int, default=1,
                                    help='Pretrained resnet')
-parser.add_argument('--return_features', type=int, default=0)
 # If model is Convnet
 parser.add_argument('--prediction_net', type=str, default='convnet',
                     choices=['resnet18', 'resnet34', 'resnet50', 'convnet'])
 
 parser.add_argument('--n_context_channels', type=int, default=3, help='Used when using a convnet/resnet')
 parser.add_argument('--use_context', type=int, default=0)
+parser.add_argument('--bn', type=int, default=0, help='Whether or not to adapt batchnorm statistics.')
 
 # Data args
 parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist','celeba','femnist', 'cifar', 'tinyimagenet'])
@@ -257,7 +238,7 @@ parser.add_argument('--data_dir', type=str, default='../data/')
 # CelebA Data
 parser.add_argument('--target_resolution', type=int, default=224,
                     help='Resize image to this size before feeding in to model')
-parser.add_argument('--target_name', type=str, nargs='+', default=['Blond_Hair'],
+parser.add_argument('--target_name', type=str, default='Blond_Hair',
                     help='The y value we are trying to predict')
 parser.add_argument('--confounder_names', type=str, nargs='+',
                     default=['Male'],
@@ -294,7 +275,7 @@ parser.add_argument('--n_test_per_dist', type=int, default=3000,
 # Logging
 parser.add_argument('--seed', type=int, default=0, help='Seed')
 parser.add_argument('--debug', type=int, default=0)
-parser.add_argument('--log_wandb', type=int, default=0)
+parser.add_argument('--log_wandb', type=int, default=1)
 
 parser.add_argument('--num_workers', type=int, default=8, help='Num workers for pytorch data loader')
 parser.add_argument('--pin_memory', type=int, default=1, help='Pytorch loader pin memory. \
@@ -306,9 +287,9 @@ parser.add_argument('--crop_size_factor', type=float, default=1)
 parser.add_argument('--ckpt_folders', type=str, nargs='+')
 
 parser.add_argument('--context_net', type=str, default='convnet')
-parser.add_argument('--bn', type=int, default=0, help='Whether or not to adapt batchnorm statistics.')
 
 parser.add_argument('--experiment_name', type=str, default='')
+parser.add_argument('--n_inner_iter', type=int, default=1)
 
 
 args = parser.parse_args()
@@ -316,6 +297,8 @@ args = parser.parse_args()
 
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
+
+args.learned_loss = True
 
 
 if __name__ == "__main__":
@@ -329,7 +312,13 @@ if __name__ == "__main__":
         args.cuda = False
 
     # Check if checkpoints exist
+    for ckpt_folder in args.ckpt_folders:
+        ckpt_path = ckpt_folder + f'best_weights.pkl'
         state_dict = torch.load(ckpt_path)
+
+        ckpt_path_learned_loss = ckpt_folder + f'best_learned_loss_weights.pkl'
+        state_dict = torch.load(ckpt_path_learned_loss)
+
         print("Found: ", ckpt_path)
 
     all_test_stats = [] # Store all test results in list.
@@ -337,7 +326,8 @@ if __name__ == "__main__":
     for i, ckpt_folder in enumerate(args.ckpt_folders):
 
         args.seed = i + 10 # Mainly to make sure seed for training and testing is not the same. Not critical.
-        args.ckpt_path = ckpt_folder #Path('output') / 'checkpoints' / ckpt_folder / f'best_weights.pkl'
+        args.ckpt_path = ckpt_folder + f'best_weights.pkl'
+        args.ckpt_path_learned_loss = ckpt_folder + f'best_learned_loss_weights.pkl'
         args.experiment_name += f'_{args.seed}'
 
         if args.log_wandb and i != 0:
@@ -364,5 +354,3 @@ if __name__ == "__main__":
         print("TEST STATS: \n ", test_stats)
 
     print("All test stats: ", all_test_stats)
-
-

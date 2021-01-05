@@ -8,7 +8,7 @@ import torch
 ### Evaluate on groups ###
 ##########################
 
-def evaluate_groups(args, model, loader, epoch=None, split='val', n_samples_per_dist=None):
+def evaluate_groups(args, model, loader, epoch=None, split='val', n_samples_per_dist=None, streaming=False):
     """ Test model on groups and log to wandb
 
         Separate script for femnist for speed."""
@@ -53,8 +53,15 @@ def evaluate_groups(args, model, loader, epoch=None, split='val', n_samples_per_
             batches.append((X, Y, G))
 
         counter = 0
+#         all_images, all_labels = [], []
         for images, labels, group_id in batches:
 
+            if streaming:
+                all_images.append(images)
+                all_labels.append(labels)
+                images = torch.cat(all_images)
+                labels = torch.cat(all_labels)
+            
             labels = labels.detach().numpy()
             images = images.to(args.device)
 

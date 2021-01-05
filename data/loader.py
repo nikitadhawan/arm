@@ -33,7 +33,8 @@ def get_loader(dataset, sampling_type=None, batch_size=None, meta_batch_size=Non
 
     elif sampling_type == 'meta_batch_groups': # Sample support batches from multiple sub distributions
         batch_sampler = ClusteredGroupSampler(dataset, meta_batch_size, support_size,
-                                          uniform_over_groups=args.uniform_over_groups)
+                                          uniform_over_groups=args.uniform_over_groups, 
+                                              learned_groups=args.learned_groups)
 
         batch_size = 1
         shuffle = None

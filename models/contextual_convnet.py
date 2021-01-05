@@ -24,6 +24,14 @@ class LearnedLoss(nn.Module):
 
         return loss
 
+class Identity(nn.Module):
+    def __init__(self):
+        super(Identity, self).__init__()
+
+    def forward(self, x):
+        return x
+    
+
 class ContextNet(nn.Module):
 
     def __init__(self, in_channels, out_channels, hidden_dim, kernel_size, classify=False):
@@ -61,12 +69,15 @@ class ContextNet(nn.Module):
 class ResNet(nn.Module):
 
     def __init__(self, num_channels, num_classes, model_name, pretrained=None,
-                 avgpool=False):
+                 avgpool=False, return_features=False):
         super(ResNet, self).__init__()
 
         self.model = torchvision.models.__dict__[model_name](pretrained=pretrained)
-        num_ftrs = self.model.fc.in_features
-        self.model.fc = nn.Linear(num_ftrs, num_classes)
+        self.num_features = self.model.fc.in_features
+        if return_features:
+            self.model.fc = Identity()
+        else:
+            self.model.fc = nn.Linear(self.num_features, num_classes)
 
         # Change number of input channels from 3 to whatever is needed
         # to take in the context also.
@@ -91,8 +102,9 @@ class ResNet(nn.Module):
 class ContextualConvNet(nn.Module):
 
     def __init__(self, num_channels=3, prediction_net='resnet18', num_classes=10,
-                 support_size=50, use_context=None, n_context_channels=None,
-                 pretrained=None, context_net='convnet',  **kwargs):
+                 num_domains=56, support_size=50, use_context=None, 
+                 n_context_channels=None, pretrained=None, context_net='convnet', 
+                 return_features=False, **kwargs):
         super(ContextualConvNet, self).__init__()
 
         self.num_channels = num_channels
@@ -117,13 +129,26 @@ class ContextualConvNet(nn.Module):
                 cml = True
             else:
                 cml = False
-            self.prediction_net = ConvNet(num_channels=n_pred_channels, num_classes=num_classes, cml=cml)
+            self.prediction_net = ConvNet(num_channels=n_pred_channels, num_classes=num_classes, cml=cml, return_features=return_features)
         else: # resnets
             self.prediction_net = ResNet(num_channels=n_pred_channels,
-                                          num_classes=num_classes, model_name=prediction_net,
-                                         pretrained=pretrained)
+                                          num_classes=num_classes, 
+                                         model_name=prediction_net,
+                                         pretrained=pretrained, 
+                                         return_features=return_features)
             #if use_context:
                 #self.prediction_net = nn.DataParallel(self.prediction_net)
+        if return_features:
+            self.featurizer = self.prediction_net
+            self.classifier = nn.Linear(self.prediction_net.num_features, num_classes)
+            self.discriminator = nn.Sequential(
+                    nn.Linear(self.prediction_net.num_features, 256),
+                    nn.ReLU(),
+                    nn.Linear(256, 256),
+                    nn.ReLU(),
+                    nn.Linear(256, num_domains),
+                  )
+            self.prediction_net = nn.Sequential(self.featurizer, self.classifier)
 
 
 
@@ -154,7 +179,8 @@ class BNConvNet(nn.Module):
 
     def __init__(self, num_channels=3, prediction_net='resnet18', num_classes=10,
                  support_size=50, bn_track_running_stats=False,
-                 pretrained=None, context_net='convnet',  **kwargs):
+                 pretrained=None, context_net='convnet', num_domains=56,
+                 return_features=False, **kwargs):
         super(BNConvNet, self).__init__()
 
         self.num_channels = num_channels
@@ -175,13 +201,29 @@ class BNConvNet(nn.Module):
         n_pred_channels = num_channels
 
         if prediction_net == 'convnet':
-            self.prediction_net = ConvNet(num_channels=n_pred_channels, num_classes=num_classes, cml=True, bn_track_running_stats=False)
+            self.prediction_net = ConvNet(num_channels=n_pred_channels, 
+                                          num_classes=num_classes, cml=True, 
+                                          bn_track_running_stats=False, 
+                                          return_features=return_features)
         else: # resnets
             self.prediction_net = ResNet(num_channels=n_pred_channels,
-                                          num_classes=num_classes, model_name=prediction_net,
-                                         pretrained=pretrained)
+                                          num_classes=num_classes, 
+                                         model_name=prediction_net,
+                                         pretrained=pretrained, 
+                                        return_features=return_features)
 #             self.prediction_net = nn.DataParallel(self.prediction_net)
-
+       
+        if return_features:
+            self.featurizer = self.prediction_net
+            self.classifier = nn.Linear(self.prediction_net.num_features, num_classes)
+            self.discriminator = nn.Sequential(
+                    nn.Linear(self.prediction_net.num_features, 256),
+                    nn.ReLU(),
+                    nn.Linear(256, 256),
+                    nn.ReLU(),
+                    nn.Linear(256, num_domains),
+                  )
+            self.prediction_net = nn.Sequential(self.featurizer, self.classifier)
 
 
     def forward(self, x):
@@ -212,7 +254,7 @@ class BNConvNet(nn.Module):
         return out #, activations
     
 class ConvNet(nn.Module):
-    def __init__(self, num_classes=10, num_channels=3, cml=True, bn_track_running_stats=True, **kwargs):
+    def __init__(self, num_classes=10, num_channels=3, cml=True, bn_track_running_stats=True, return_features=False, **kwargs):
         super(ConvNet, self).__init__()
 
         hidden_dim = 128
@@ -264,8 +306,9 @@ class ConvNet(nn.Module):
         self.final = nn.Sequential(
                     nn.Linear(hidden_dim, 200),
                     nn.ReLU(),
-                    nn.Linear(200, num_classes)
+                    Identity() if return_features else nn.Linear(200, num_classes)
                   )
+        self.num_features = 200
 
 
     def forward(self, x):

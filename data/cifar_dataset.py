@@ -23,11 +23,11 @@ class CIFARDataset(Dataset):
 
     def __init__(self, split, root_dir):
         if split == 'train':
-            self.root_dir = Path(root_dir) / 'CIFAR-10-C-1000/'
+            self.root_dir = Path(root_dir) / 'CIFAR-10-C-new/train/'
             corruptions = ['gaussian_noise', 'shot_noise', 'defocus_blur', 'glass_blur', 'zoom_blur', 'snow', 'frost', 'brightness', 'contrast', 'pixelate']
             other_idx = [0, 1, 2, 5, 6, 7] 
         if split == 'val':
-            self.root_dir = Path(root_dir) / 'CIFAR-10-C-1000/'
+            self.root_dir = Path(root_dir) / 'CIFAR-10-C-new/val/'
             corruptions = ['speckle_noise', 'gaussian_blur', 'saturate']
             other_idx = [3, 9]
         if split == 'test':
@@ -66,7 +66,7 @@ class CIFARDataset(Dataset):
                                             density=False)
 
         self.transform = get_transform()
-
+        self.learned_groups = np.load("/home/nikita/mttp/entmin_cifar_groupings.npy")
 
         print("split: ", split)
         print("n groups: ", self.n_groups)
@@ -86,9 +86,9 @@ class CIFARDataset(Dataset):
 
 def get_transform():
     transform = albumentations.Compose([
-        albumentations.RandomCrop(28, 28, always_apply=True),
-        albumentations.Resize(height=32, width=32, interpolation=1, p=1, always_apply=True),
-        albumentations.HorizontalFlip(),
+#        albumentations.RandomCrop(28, 28, always_apply=True),
+#        albumentations.Resize(height=32, width=32, interpolation=1, p=1, always_apply=True),
+#        albumentations.HorizontalFlip(),
         albumentations.Normalize(mean=[0.485, 0.456, 0.406], 
                                 std=[0.229, 0.224, 0.225], max_pixel_value=255, 
                                 p=1.0, always_apply=True),
